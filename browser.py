@@ -1,117 +1,133 @@
 import sys
+import os
+import importlib
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtWebEngineWidgets import *
 from PyQt5.QtGui import QIcon
 
+script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+MODULES_PATH = os.path.join(script_dir, "modules")
+
+class CustomTabBar(QTabBar):
+    def wheelEvent(self, event): pass
+    def tabSizeHint(self, index):
+        size = super().tabSizeHint(index)
+        size.setWidth(min(size.width(), 150))
+        return size
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionTab()
+        for index in range(self.count()):
+            self.initStyleOption(option, index)
+            option.text = self.tabText(index)
+            painter.drawControl(QStyle.CE_TabBarTabShape, option)
+            painter.drawControl(QStyle.CE_TabBarTabLabel, option)
+
+class CustomComboBox(QComboBox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.placeholder = "≡"
+        self.addItem(self.placeholder)
+        self.currentIndexChanged.connect(self.on_item_selected)
+
+    def showPopup(self):
+        if self.currentText() == self.placeholder:
+            self.setCurrentIndex(-1)
+        super().showPopup()
+
+    def hidePopup(self):
+        if self.currentIndex() == -1:
+            self.setCurrentIndex(self.findText(self.placeholder))
+        super().hidePopup()
+
+    def on_item_selected(self, index):
+        if index != 0:
+            self.setCurrentIndex(0)
+
+class CustomTabBarWithDropdown(CustomTabBar):
+    def __init__(self):
+        super().__init__()
+        self.comboBox = CustomComboBox(self)
+        self.comboBox.move(self.width() - self.comboBox.width(), 0)
+    def resizeEvent(self, event):
+        self.comboBox.move(self.width() - self.comboBox.width(), 0)
+
 class Browser(QMainWindow):
     def __init__(self):
         super().__init__()
-        
-        # Set the window title and (optionally) an icon for the browser window
         self.setWindowTitle("MyBrowser")
-        self.setWindowIcon(QIcon('path_to_icon.png'))  # Replace 'path_to_icon.png' with your actual path
-        
-        # Initialize a tabbed interface for browsing
-        self.tabs = QTabWidget()
-        
-        # Enable advanced tab features
+        self.setWindowIcon(QIcon('path_to_icon.png'))
+        self.setupUI()
+        self.modules = self.load_modules_into_dropdown()
+        self.showMaximized()
+
+    def setupUI(self):
+        self.tabs = QTabWidget(self)
+        self.tabs.setTabBar(CustomTabBarWithDropdown())
         self.tabs.setDocumentMode(True)
-        
-        # Connect tab events to their respective functions
         self.tabs.tabBarDoubleClicked.connect(self.tab_open_doubleclick)
         self.tabs.currentChanged.connect(self.current_tab_changed)
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_current_tab)
-
-        # Set the tabs as the central widget of the window
-        self.setCentralWidget(self.tabs)
-
-        # Create a status bar (optional, can be used to show loading status, etc.)
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
-
-        # Create a navigation toolbar for URL entry, back/forward buttons, etc.
         navtb = QToolBar("Navigation")
-        self.addToolBar(navtb)
-        
-        # Add a URL input bar to the navigation toolbar
-        self.url_bar = QLineEdit()
-        self.url_bar.returnPressed.connect(self.navigate_to_url)  # Connect the URL bar's enter/return event
+        self.url_bar = QLineEdit(self)
+        self.url_bar.returnPressed.connect(self.navigate_to_url)
         navtb.addWidget(self.url_bar)
-
-        # Create and add a "New Tab" button to the navigation toolbar
-        new_tab_action = QAction(QIcon('path_to_icon.png'), "New Tab", self)  # Replace 'path_to_icon.png' with your actual path
+        new_tab_action = QAction(QIcon('path_to_icon.png'), "New Tab", self)
         new_tab_action.triggered.connect(self.add_new_tab)
         navtb.addAction(new_tab_action)
-        
-        # Add a '+' tab that allows users to open new tabs
         self.tabs.addTab(QWidget(), "+")
-        self.add_new_tab(QUrl('http://www.startpage.com'), 'Homepage')  # Open a default start page
+        layout = QVBoxLayout()
+        layout.addWidget(navtb)        
+        layout.addWidget(self.tabs)
+        central_widget = QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+        self.add_new_tab(QUrl('http://www.startpage.com'), 'Homepage')
 
     def add_new_tab(self, qurl=None, label="Blank"):
-        """Open a new browser tab. Load a default page if no URL is provided."""
-        if qurl is None:
-            qurl = QUrl('http://www.startpage.com')
-    
+        if qurl is None: qurl = QUrl('http://www.startpage.com')
         browser = QWebEngineView()
         browser.setUrl(qurl)
-        
-        # Insert this tab right before the '+' tab
         i = self.tabs.insertTab(self.tabs.count() - 1, browser, label)
-        self.tabs.setCurrentIndex(i)
-        
-        # Connect browser signals to update the UI accordingly
         browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
-        browser.loadFinished.connect(lambda _, i=i, browser=browser: self.tabs.setTabText(i, browser.page().title()))
+        browser.loadFinished.connect(lambda _, i=i, browser=browser: self.tabs.setTabText(i, browser.page().title()[:15] + "..."))
 
     def tab_open_doubleclick(self, i):
-        """Open a new tab on double-click on the tab bar."""
-        if i == -1:
-            return
-        if self.tabs.tabText(i) != "+":
-            self.add_new_tab()
+        if i != -1 and self.tabs.tabText(i) == "+": self.add_new_tab()
 
     def current_tab_changed(self, i):
-        """Handles the tab change event."""
-        # If '+' is clicked, open a new tab
         if self.tabs.tabText(i) == "+" and i == self.tabs.count() - 1:
             self.add_new_tab()
-            self.tabs.setCurrentIndex(self.tabs.count() - 2)  # Switch to the new tab
-            return
-
-        qurl = self.tabs.currentWidget().url()
-        self.update_urlbar(qurl, self.tabs.currentWidget())
-        self.update_title(self.tabs.currentWidget())
+            self.tabs.setCurrentIndex(self.tabs.count() - 2)
 
     def close_current_tab(self, i):
-        """Close the current tab."""
-        if self.tabs.tabText(i) == "+":
-            return
-        if self.tabs.count() < 2:
-            return
-        self.tabs.removeTab(i)
-
-    def update_title(self, browser):
-        """Update the window title based on the browser's current page title."""
-        title = browser.page().title()
-        self.setWindowTitle("% s - MyBrowser" % title)
+        if self.tabs.tabText(i) != "+" and self.tabs.count() > 2: self.tabs.removeTab(i)
 
     def update_urlbar(self, q, browser=None):
-        """Update the URL bar to the current page's URL."""
-        if not hasattr(self, 'url_bar') or browser != self.tabs.currentWidget():
-            return
-        self.url_bar.setText(q.toString())
-        self.url_bar.setCursorPosition(0)
+        if hasattr(self, 'url_bar') and browser == self.tabs.currentWidget():
+            self.url_bar.setText(q.toString())
 
     def navigate_to_url(self):
-        """Navigate to the URL specified in the URL bar."""
-        if not hasattr(self, 'url_bar'):
-            return
         q = QUrl(self.url_bar.text())
-        if q.scheme() == "":
-            q.setScheme("http")
+        if not q.scheme(): q.setScheme("http")
         self.tabs.currentWidget().setUrl(q)
+
+    def load_modules_into_dropdown(self):
+        modules = {}
+        for module_file in [f[:-3] for f in os.listdir(MODULES_PATH) if f.endswith('.py') and not f.startswith('__init__')]:
+            module = importlib.import_module(f"modules.{module_file}")
+            if hasattr(module, "get_module_name"):
+                self.tabs.tabBar().comboBox.addItem(module.get_module_name())
+                modules[module.get_module_name()] = module
+        self.tabs.tabBar().comboBox.activated[str].connect(self.execute_selected_module)
+        return modules
+
+    def execute_selected_module(self, module_name):
+        module = self.modules.get(module_name)
+        if module and hasattr(module, "execute_module_function"): module.execute_module_function()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
